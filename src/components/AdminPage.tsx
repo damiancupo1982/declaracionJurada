@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { LogOut, Search, Eye, Printer, ChevronLeft, Users, Loader2, AlertCircle, X, Share2, Download, Home } from 'lucide-react';
+import { LogOut, Search, Eye, Printer, ChevronLeft, Users, Loader2, AlertCircle, X, Share2, Download, Home, CheckSquare, Square } from 'lucide-react';
 import FormPreviewContent from './FormPreviewContent';
 import type { FormSubmission, ParqAnswers, DeclarationData } from '../types';
 import html2canvas from 'html2canvas';
@@ -38,6 +38,35 @@ function buildParq(s: FormSubmission): ParqAnswers {
   };
 }
 
+async function renderToPDF(el: HTMLDivElement, filename: string) {
+  const canvas = await html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', logging: false, allowTaint: true });
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const imgW = pageW;
+  const imgH = imgW * canvas.height / canvas.width;
+  let pos = 0;
+  let remaining = imgH;
+  pdf.addImage(dataUrl, 'JPEG', 0, pos, imgW, imgH);
+  remaining -= pageH;
+  while (remaining > 0) {
+    pos -= pageH;
+    pdf.addPage();
+    pdf.addImage(dataUrl, 'JPEG', 0, pos, imgW, imgH);
+    remaining -= pageH;
+  }
+  const blob = pdf.output('blob');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void }) {
   const [authed, setAuthed] = useState(false);
   const [pw, setPw] = useState('');
@@ -49,6 +78,12 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
   const [selected, setSelected] = useState<FormSubmission | null>(null);
   const [actionError, setActionError] = useState('');
   const previewRef = useRef<HTMLDivElement>(null);
+
+  // Bulk selection state
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkQueue, setBulkQueue] = useState<FormSubmission[]>([]);
+  const [bulkIndex, setBulkIndex] = useState(0); // 1-based; 0 = idle
+  const bulkRef = useRef<HTMLDivElement>(null);
 
   const login = () => {
     if (pw === ADMIN_PASSWORD) {
@@ -74,6 +109,35 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
     load();
   }, [authed]);
 
+  // Bulk PDF download queue processor
+  useEffect(() => {
+    if (bulkIndex === 0 || bulkIndex > bulkQueue.length) {
+      if (bulkIndex > bulkQueue.length && bulkQueue.length > 0) {
+        setBulkQueue([]);
+        setBulkIndex(0);
+        setCheckedIds(new Set());
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const process = async () => {
+      await new Promise(r => setTimeout(r, 350));
+      if (cancelled) return;
+      const el = bulkRef.current;
+      if (!el) { setBulkIndex(i => i + 1); return; }
+      const sub = bulkQueue[bulkIndex - 1];
+      try {
+        await renderToPDF(el, `formulario_${sub.apellido}_${sub.dni}.pdf`);
+      } catch {
+        // continue even if one fails
+      }
+      if (!cancelled) setBulkIndex(i => i + 1);
+    };
+    process();
+    return () => { cancelled = true; };
+  }, [bulkIndex, bulkQueue]);
+
   const filtered = submissions.filter(s => {
     const q = search.toLowerCase();
     return (
@@ -83,21 +147,42 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
     );
   });
 
-  const getDocImageData = async (): Promise<{ dataUrl: string; width: number; height: number }> => {
-    const el = previewRef.current;
-    if (!el) throw new Error('No se pudo generar el documento');
-    const canvas = await html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', logging: false, allowTaint: true });
-    return { dataUrl: canvas.toDataURL('image/jpeg', 0.85), width: canvas.width, height: canvas.height };
+  const allChecked = filtered.length > 0 && filtered.every(s => checkedIds.has(s.id));
+
+  const toggleCheck = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCheckedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allChecked) {
+      setCheckedIds(new Set());
+    } else {
+      setCheckedIds(new Set(filtered.map(s => s.id)));
+    }
+  };
+
+  const startBulkDownload = () => {
+    const toDownload = filtered.filter(s => checkedIds.has(s.id));
+    if (toDownload.length === 0) return;
+    setBulkQueue(toDownload);
+    setBulkIndex(1);
   };
 
   const generatePDF = async (): Promise<Blob> => {
-    const { dataUrl, width, height } = await getDocImageData();
+    const el = previewRef.current;
+    if (!el) throw new Error('No se pudo generar el documento');
+    const canvas = await html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', logging: false, allowTaint: true });
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
-    const ratio = width / height;
     const imgW = pageW;
-    const imgH = imgW / ratio;
+    const imgH = imgW * canvas.height / canvas.width;
     let pos = 0;
     let remaining = imgH;
     pdf.addImage(dataUrl, 'JPEG', 0, pos, imgW, imgH);
@@ -146,7 +231,6 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
           if (shareErr instanceof Error && shareErr.name === 'AbortError') return;
         }
       }
-      // Fallback: download
       await handleExportImage();
     } catch {
       setActionError('No se pudo compartir.');
@@ -253,7 +337,6 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
             </div>
           ) : null}
 
-          {/* Always render for print/export */}
           <div
             className={selected.documento_firmado ? 'sr-only' : 'bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-5'}
             aria-hidden={!!selected.documento_firmado}
@@ -283,7 +366,6 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
             </div>
           </div>
 
-          {/* Hidden ref for export when stored image exists */}
           {selected.documento_firmado && (
             <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none', opacity: 0 }}>
               <FormPreviewContent
@@ -314,9 +396,45 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
     );
   }
 
+  // Bulk render area — off-screen, renders current queued submission for PDF capture
+  const bulkCurrent = bulkIndex > 0 && bulkIndex <= bulkQueue.length ? bulkQueue[bulkIndex - 1] : null;
+  const bulkDate = bulkCurrent
+    ? (bulkCurrent.fecha_completado
+        ? new Date(bulkCurrent.fecha_completado).toLocaleDateString('es-AR')
+        : new Date(bulkCurrent.created_at || '').toLocaleDateString('es-AR'))
+    : '';
+
   // List view
   return (
     <div className="min-h-screen bg-slate-100">
+      {/* Off-screen bulk render target */}
+      {bulkCurrent && (
+        <div style={{ position: 'fixed', left: -9999, top: 0, width: 794, pointerEvents: 'none', zIndex: -1 }}>
+          <div ref={bulkRef}>
+            <FormPreviewContent
+              studentData={{
+                nombre: bulkCurrent.nombre,
+                apellido: bulkCurrent.apellido,
+                dni: bulkCurrent.dni,
+                fechaNacimiento: bulkCurrent.fecha_nacimiento || '',
+                edad: bulkCurrent.edad ?? '',
+                telefono: bulkCurrent.telefono || '',
+                email: bulkCurrent.email || '',
+                domicilio: bulkCurrent.domicilio || '',
+              }}
+              answers={buildParq(bulkCurrent)}
+              emergency={{
+                nombre: bulkCurrent.contacto_emergencia_nombre || '',
+                telefono: bulkCurrent.contacto_emergencia_tel || '',
+              }}
+              firmaData={bulkCurrent.firma_data || ''}
+              declaration={buildDeclaration(bulkCurrent)}
+              date={bulkDate}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="bg-slate-800 text-white px-5 py-5 shadow-lg">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div>
@@ -388,36 +506,113 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
             <p className="text-sm">{search ? 'Sin resultados para tu búsqueda.' : 'No hay formularios registrados aún.'}</p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {filtered.map(s => {
-              const hasSi = [s.parq_cardio, s.parq_dolor_pecho, s.parq_medicamento_cardiaco, s.parq_desmayos, s.parq_asma, s.parq_alteracion_osea, s.parq_otra_razon].some(v => v === true);
-              return (
-                <button
-                  key={s.id}
-                  onClick={() => setSelected(s)}
-                  className="w-full text-left bg-white rounded-2xl shadow-sm border border-slate-200 hover:border-slate-400 p-4 transition-all flex items-center justify-between gap-3"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="font-semibold text-slate-800 text-sm">{s.apellido}, {s.nombre}</span>
-                      {hasSi && (
-                        <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-0.5 rounded-full">SÍ en PAR-Q</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
-                      <span>DNI: {s.dni}</span>
-                      {s.edad && <span>{s.edad} años</span>}
-                      {s.sexo && <span>{s.sexo}</span>}
-                      <span>{formatDate(s.fecha_completado || s.created_at)}</span>
-                    </div>
+          <>
+            {/* Select all row */}
+            <div className="flex items-center justify-between px-1 mb-2">
+              <button
+                onClick={toggleAll}
+                className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 transition-colors font-medium"
+              >
+                {allChecked
+                  ? <CheckSquare size={18} className="text-slate-700" />
+                  : <Square size={18} className="text-slate-400" />
+                }
+                {allChecked ? 'Deseleccionar todo' : 'Seleccionar todo'}
+              </button>
+              {checkedIds.size > 0 && (
+                <span className="text-xs text-slate-500">{checkedIds.size} seleccionado{checkedIds.size !== 1 ? 's' : ''}</span>
+              )}
+            </div>
+
+            <div className="space-y-2 pb-28">
+              {filtered.map(s => {
+                const hasSi = [s.parq_cardio, s.parq_dolor_pecho, s.parq_medicamento_cardiaco, s.parq_desmayos, s.parq_asma, s.parq_alteracion_osea, s.parq_otra_razon].some(v => v === true);
+                const isChecked = checkedIds.has(s.id);
+                return (
+                  <div
+                    key={s.id}
+                    className={`w-full bg-white rounded-2xl shadow-sm border transition-all flex items-center gap-3 px-4 py-4 ${isChecked ? 'border-slate-500 ring-1 ring-slate-400' : 'border-slate-200'}`}
+                  >
+                    {/* Checkbox */}
+                    <button
+                      onClick={e => toggleCheck(s.id, e)}
+                      className="flex-shrink-0 p-0.5 rounded focus:outline-none"
+                      aria-label="Seleccionar"
+                    >
+                      {isChecked
+                        ? <CheckSquare size={22} className="text-slate-700" />
+                        : <Square size={22} className="text-slate-300 hover:text-slate-500 transition-colors" />
+                      }
+                    </button>
+
+                    {/* Row content — click to open detail */}
+                    <button
+                      onClick={() => setSelected(s)}
+                      className="flex-1 min-w-0 text-left"
+                    >
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="font-semibold text-slate-800 text-sm">{s.apellido}, {s.nombre}</span>
+                        {hasSi && (
+                          <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-0.5 rounded-full">SÍ en PAR-Q</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                        <span>DNI: {s.dni}</span>
+                        {s.edad && <span>{s.edad} años</span>}
+                        {s.sexo && <span>{s.sexo}</span>}
+                        <span>{formatDate(s.fecha_completado || s.created_at)}</span>
+                      </div>
+                    </button>
+
+                    <Eye size={16} className="text-slate-300 flex-shrink-0" />
                   </div>
-                  <Eye size={18} className="text-slate-400 flex-shrink-0" />
-                </button>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
+
+      {/* Floating bulk action bar */}
+      {checkedIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center px-4 pb-5 pointer-events-none">
+          <div className="w-full max-w-2xl pointer-events-auto">
+            <div className="bg-slate-900 rounded-2xl shadow-2xl border border-slate-700 px-5 py-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-white font-bold text-sm">
+                  {checkedIds.size} formulario{checkedIds.size !== 1 ? 's' : ''} seleccionado{checkedIds.size !== 1 ? 's' : ''}
+                </p>
+                {bulkIndex > 0 && bulkIndex <= bulkQueue.length && (
+                  <p className="text-slate-400 text-xs mt-0.5 flex items-center gap-1.5">
+                    <Loader2 size={12} className="animate-spin" />
+                    Descargando {bulkIndex} de {bulkQueue.length}...
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCheckedIds(new Set())}
+                  className="px-3 py-2 rounded-xl text-slate-400 hover:text-white transition-colors text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={startBulkDownload}
+                  disabled={bulkIndex > 0 && bulkIndex <= bulkQueue.length}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ background: 'linear-gradient(135deg, #facc15, #f59e0b)', color: '#000' }}
+                >
+                  {bulkIndex > 0 && bulkIndex <= bulkQueue.length
+                    ? <Loader2 size={16} className="animate-spin" />
+                    : <Download size={16} />
+                  }
+                  Descargar PDF{checkedIds.size !== 1 ? 's' : ''}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
