@@ -35,7 +35,7 @@ export default function HomeScreen({ onStart, onAdmin }: Props) {
             style={{ background: '#111', aspectRatio: '4/3' }}
           >
             <img
-              src="/image.png"
+              src="/image copy.png"
               alt="Apolo Megagym"
               className="w-full h-full object-cover"
               onError={e => {
