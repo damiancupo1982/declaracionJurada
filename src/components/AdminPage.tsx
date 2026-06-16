@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { LogOut, Search, Eye, Printer, ChevronLeft, Users, Loader2, AlertCircle, X, Share2, Download, Home, CheckSquare, Square } from 'lucide-react';
+import { LogOut, Search, Eye, Printer, ChevronLeft, Users, Loader2, AlertCircle, X, Share2, Download, Home, CheckSquare, Square, Trash2, ShieldAlert } from 'lucide-react';
 import FormPreviewContent from './FormPreviewContent';
 import type { FormSubmission, ParqAnswers, DeclarationData } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
 const ADMIN_PASSWORD = '2525';
+const SUPER_ADMIN_PASSWORD = '842114';
 
 function formatDate(iso: string | undefined) {
   if (!iso) return '—';
@@ -85,6 +86,48 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
   const [bulkQueue, setBulkQueue] = useState<FormSubmission[]>([]);
   const [bulkIndex, setBulkIndex] = useState(0); // 1-based; 0 = idle
   const bulkRef = useRef<HTMLDivElement>(null);
+
+  // Delete modal state
+  type DeleteStep = 'password' | 'confirm';
+  const [deleteModal, setDeleteModal] = useState<DeleteStep | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deletePasswordError, setDeletePasswordError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const openDeleteModal = () => {
+    setDeletePassword('');
+    setDeletePasswordError('');
+    setDeleteModal('password');
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteModal(null);
+    setDeletePassword('');
+    setDeletePasswordError('');
+  };
+
+  const handleDeletePasswordSubmit = () => {
+    if (deletePassword === SUPER_ADMIN_PASSWORD) {
+      setDeletePasswordError('');
+      setDeleteModal('confirm');
+    } else {
+      setDeletePasswordError('Clave incorrecta.');
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    setDeleting(true);
+    const ids = Array.from(checkedIds);
+    const { error } = await supabase.from('submissions').delete().in('id', ids);
+    if (!error) {
+      setSubmissions(prev => prev.filter(s => !checkedIds.has(s.id)));
+      setCheckedIds(new Set());
+      closeDeleteModal();
+    } else {
+      setDeletePasswordError(error.message);
+    }
+    setDeleting(false);
+  };
 
   const login = () => {
     if (pw === ADMIN_PASSWORD) {
@@ -614,6 +657,14 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
                   Cancelar
                 </button>
                 <button
+                  onClick={openDeleteModal}
+                  disabled={bulkIndex > 0 && bulkIndex <= bulkQueue.length}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm bg-red-600 hover:bg-red-500 text-white transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Trash2 size={16} />
+                  Eliminar
+                </button>
+                <button
                   onClick={startBulkDownload}
                   disabled={bulkIndex > 0 && bulkIndex <= bulkQueue.length}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -627,6 +678,106 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 animate-in fade-in zoom-in-95 duration-150">
+
+            {deleteModal === 'password' && (
+              <>
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-11 h-11 rounded-2xl bg-red-100 flex items-center justify-center flex-shrink-0">
+                    <ShieldAlert className="text-red-600" size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800">Eliminar declaraciones</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Ingresá la clave de superadministrador</p>
+                  </div>
+                </div>
+
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={e => { setDeletePassword(e.target.value); setDeletePasswordError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleDeletePasswordSubmit()}
+                  placeholder="••••••"
+                  autoFocus
+                  className={`w-full border rounded-xl px-4 py-3 text-slate-800 text-base focus:outline-none focus:ring-2 focus:ring-red-400 mb-1 ${deletePasswordError ? 'border-red-400 bg-red-50' : 'border-slate-300'}`}
+                />
+                {deletePasswordError && (
+                  <div className="flex items-center gap-1 mb-3">
+                    <AlertCircle size={12} className="text-red-500" />
+                    <p className="text-xs text-red-500">{deletePasswordError}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={closeDeleteModal}
+                    className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-all"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleDeletePasswordSubmit}
+                    className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-bold transition-all active:scale-95"
+                  >
+                    Continuar
+                  </button>
+                </div>
+              </>
+            )}
+
+            {deleteModal === 'confirm' && (
+              <>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-11 h-11 rounded-2xl bg-red-100 flex items-center justify-center flex-shrink-0">
+                    <Trash2 className="text-red-600" size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800">¿Confirmar eliminación?</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Esta acción no se puede deshacer</p>
+                  </div>
+                </div>
+
+                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-5">
+                  <p className="text-sm text-red-700 font-medium">
+                    Se eliminarán permanentemente <span className="font-bold">{checkedIds.size} declaracion{checkedIds.size !== 1 ? 'es' : ''}</span> del sistema.
+                  </p>
+                  <p className="text-xs text-red-500 mt-1">Asegurate de haber descargado los PDFs antes de continuar.</p>
+                </div>
+
+                {deletePasswordError && (
+                  <div className="flex items-center gap-1 mb-3">
+                    <AlertCircle size={12} className="text-red-500" />
+                    <p className="text-xs text-red-500">{deletePasswordError}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={closeDeleteModal}
+                    disabled={deleting}
+                    className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-all disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleConfirmDelete}
+                    disabled={deleting}
+                    className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                    {deleting ? 'Eliminando...' : 'Sí, eliminar'}
+                  </button>
+                </div>
+              </>
+            )}
+
           </div>
         </div>
       )}
