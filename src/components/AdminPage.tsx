@@ -76,6 +76,7 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<FormSubmission | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [actionError, setActionError] = useState('');
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -100,7 +101,7 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
       setLoading(true);
       const { data, error } = await supabase
         .from('submissions')
-        .select('*')
+        .select('id,nombre,apellido,dni,edad,sexo,telefono,email,domicilio,fecha_nacimiento,fecha_completado,created_at,contacto_emergencia_nombre,contacto_emergencia_tel,parq_cardio,parq_dolor_pecho,parq_medicamento_cardiaco,parq_desmayos,parq_asma,parq_alteracion_osea,parq_otra_razon')
         .order('created_at', { ascending: false });
       if (error) setError(error.message);
       else setSubmissions((data as FormSubmission[]) || []);
@@ -312,6 +313,12 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
         </div>
 
         <div className="max-w-2xl mx-auto px-4 py-5">
+          {detailLoading && (
+            <div className="flex items-center justify-center gap-2 py-8 text-slate-500">
+              <Loader2 className="animate-spin" size={20} />
+              <span className="text-sm">Cargando formulario...</span>
+            </div>
+          )}
           {actionError && (
             <div className="flex gap-2 bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
               <AlertCircle className="text-red-500 flex-shrink-0" size={16} />
@@ -319,6 +326,7 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
             </div>
           )}
 
+          {!detailLoading && (
           <div className="flex gap-2 mb-5 flex-wrap">
             <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-700 font-medium text-sm hover:bg-slate-50 shadow-sm transition-all">
               <Printer size={16} /> Imprimir
@@ -330,13 +338,15 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
               <Share2 size={16} /> Compartir
             </button>
           </div>
+          )}
 
-          {selected.documento_firmado ? (
+          {!detailLoading && selected.documento_firmado ? (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-5 p-2">
               <img src={selected.documento_firmado} alt="Formulario firmado" className="w-full rounded-xl" />
             </div>
           ) : null}
 
+          {!detailLoading && (
           <div
             className={selected.documento_firmado ? 'sr-only' : 'bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-5'}
             aria-hidden={!!selected.documento_firmado}
@@ -365,8 +375,9 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
               />
             </div>
           </div>
+          )}
 
-          {selected.documento_firmado && (
+          {!detailLoading && selected.documento_firmado && (
             <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none', opacity: 0 }}>
               <FormPreviewContent
                 ref={previewRef}
@@ -547,7 +558,13 @@ export default function AdminPage({ onBackToHome }: { onBackToHome?: () => void 
 
                     {/* Row content — click to open detail */}
                     <button
-                      onClick={() => setSelected(s)}
+                      onClick={async () => {
+                        setDetailLoading(true);
+                        setSelected(s); // show skeleton immediately
+                        const { data } = await supabase.from('submissions').select('*').eq('id', s.id).single();
+                        if (data) setSelected(data as FormSubmission);
+                        setDetailLoading(false);
+                      }}
                       className="flex-1 min-w-0 text-left"
                     >
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
